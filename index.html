@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#071722">
+<title>English Vocabulary MASTER</title>
+<link rel="stylesheet" href="styles.css?v=20260812c1">
+</head>
+<body>
+<div class="appShell">
+  <header class="topbar">
+    <div>
+      <div class="eyebrow">PC / iPhone 共通版</div>
+      <h1>English Vocabulary <span>MASTER</span></h1>
+      <div class="subtitle" id="dataSubtitle">単語データを読み込み中...</div>
+    </div>
+    <button class="ghost smallBtn" id="settingsBtn">⚙️ データ</button>
+  </header>
+
+  <section class="stats" aria-label="学習状況">
+    <div><strong id="totalCount">0</strong><span>収録語</span></div>
+    <div><strong id="masteredCount">0</strong><span>習得</span></div>
+    <div><strong id="weakCount">0</strong><span>苦手</span></div>
+    <div><strong id="testedCount">0</strong><span>テスト済</span></div>
+  </section>
+
+  <section class="controls">
+    <label>学習範囲<select id="unitSelect"></select></label>
+    <label>並び順<select id="orderSelect"><option value="normal">順番</option><option value="shuffle">シャッフル</option></select></label>
+  </section>
+
+  <nav class="modes" id="modeNav">
+    <button data-mode="card" class="active">📚 単語カード</button>
+    <button data-mode="choice">4択</button>
+    <button data-mode="spell">⌨️ スペル</button>
+    <button data-mode="pronounce">🎤 発音</button>
+    <button data-mode="weak">🔁 苦手復習</button>
+    <button data-mode="list">🔎 一覧</button>
+  </nav>
+
+  <main>
+    <section id="studyView" class="studyCard">
+      <div class="counter" id="counterText"></div>
+      <div id="promptArea"></div>
+      <div id="interactionArea"></div>
+      <div class="statusline" id="statusLine"></div>
+    </section>
+
+    <section id="listView" class="listView hidden">
+      <div class="listTools">
+        <input id="searchInput" type="search" placeholder="英単語・意味・品詞で検索">
+        <span id="listCount"></span>
+      </div>
+      <div class="tableWrap"><table><thead><tr><th>単語</th><th>IPA</th><th>発音ガイド</th><th>意味</th><th>品詞</th><th>状態</th></tr></thead><tbody id="wordTable"></tbody></table></div>
+    </section>
+  </main>
+
+  <dialog id="dataDialog">
+    <form method="dialog">
+      <div class="dialogHead"><h2>データ・進捗</h2><button class="ghost" value="cancel">✕</button></div>
+      <p>単語数は固定ではありません。将来 <code>words.js</code> に語彙を追加すると自動で反映されます。</p>
+      <div class="dialogButtons">
+        <button type="button" id="exportBtn">進捗を書き出す</button>
+        <label class="fileBtn">進捗を読み込む<input id="importInput" type="file" accept="application/json"></label>
+        <button type="button" class="danger" id="resetBtn">進捗をリセット</button>
+      </div>
+      <p class="note">IPAを発音の基準とし、カタカナは補助的な「発音ガイド」です。英語音をカタカナだけで完全には表せません。</p>
+      <div class="build">Build: common-v1 / 2026-08-12</div>
+    </form>
+  </dialog>
+</div>
+<script src="words.js?v=20260812c1"></script>
+<script src="app.js?v=20260812c1"></script>
+</body>
+</html>
