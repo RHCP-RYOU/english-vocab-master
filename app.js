@@ -7,10 +7,26 @@ const STORAGE='english_vocab_master_progress_v2';
 const $=id=>document.getElementById(id);
 const normalize=s=>String(s||'').toLowerCase().replace(/[’']/g,'').replace(/[^a-z0-9]+/g,' ').trim();
 const shuffle=a=>{a=[...a];for(let i=a.length-1;i>0;i--){const j=Math.floor(Math.random()*(i+1));[a[i],a[j]]=[a[j],a[i]]}return a};
-const defaultState=()=>({ratings:{},quiz:{},pron:{},unit:'ALL',mode:'card',order:'normal'});
+const defaultState=()=>({ratings:{},quiz:{},pron:{},unit:'ALL',mode:'card',order:'normal',schemaVersion:4});
 let state=load();
 let queue=[],index=0,current=null,locked=false,pronAttempts=[];
-function load(){try{return {...defaultState(),...JSON.parse(localStorage.getItem(STORAGE)||'{}')}}catch{return defaultState()}}
+function migrateState(s){
+  // v2/v3 bug: a first correct quiz answer promoted 0 -> 1, and 1 meant '苦手'.
+  // Repair only unambiguous cases: quiz has correct answers and no wrong answers.
+  if(Number(s.schemaVersion||0)<4){
+    for(const w of WORDS){
+      const q=s.quiz&&s.quiz[w.id];
+      const r=Number((s.ratings&&s.ratings[w.id])||0);
+      if(r===1&&q&&Number(q.correct||0)>0&&Number(q.wrong||0)===0){
+        s.ratings[w.id]=Number(q.correct||0)>=2?3:2;
+      }
+    }
+    s.schemaVersion=4;
+    try{localStorage.setItem(STORAGE,JSON.stringify(s))}catch{}
+  }
+  return s;
+}
+function load(){try{return migrateState({...defaultState(),...JSON.parse(localStorage.getItem(STORAGE)||'{}')})}catch{return defaultState()}}
 function save(){localStorage.setItem(STORAGE,JSON.stringify(state))}
 function rating(w){return Number(state.ratings[w.id]||0)}
 function setRating(w,r){state.ratings[w.id]=r;save();updateStats()}
@@ -19,7 +35,7 @@ function unitWords(){if(state.mode==='weak')return WORDS.filter(w=>rating(w)<=1&
 function buildQueue(){let a=unitWords();queue=state.order==='shuffle'?shuffle(a):[...a].sort((a,b)=>(a.unitOrder-b.unitOrder)||(a.order-b.order));index=0}
 function next(){if(!queue.length){current=null;renderEmpty();return}if(index>=queue.length)index=0;current=queue[index++];renderCurrent()}
 function prev(){if(!queue.length)return;index=Math.max(0,index-2);next()}
-function updateStats(){const mastered=WORDS.filter(w=>rating(w)===3).length;const weak=WORDS.filter(w=>rating(w)===1).length;const tested=WORDS.filter(w=>{const q=state.quiz[w.id];return q&&(q.correct||q.wrong)}).length;$('totalCount').textContent=WORDS.length;$('masteredCount').textContent=mastered;$('weakCount').textContent=weak;$('testedCount').textContent=tested;$('dataSubtitle').textContent=`${WORDS.length}語収録・発音基準 ${DATA.pronunciationLocale||'en-US'}・データ版 ${DATA.dataVersion}・アプリ v3`}
+function updateStats(){const mastered=WORDS.filter(w=>rating(w)===3).length;const weak=WORDS.filter(w=>rating(w)===1).length;const tested=WORDS.filter(w=>{const q=state.quiz[w.id];return q&&(q.correct||q.wrong)}).length;$('totalCount').textContent=WORDS.length;$('masteredCount').textContent=mastered;$('weakCount').textContent=weak;$('testedCount').textContent=tested;$('dataSubtitle').textContent=`${WORDS.length}語収録・発音基準 ${DATA.pronunciationLocale||'en-US'}・データ版 ${DATA.dataVersion}・アプリ v4`}
 function initUnits(){const units=[...new Set(WORDS.map(w=>w.unit))].sort((a,b)=>{const A=WORDS.find(w=>w.unit===a)?.unitOrder||0,B=WORDS.find(w=>w.unit===b)?.unitOrder||0;return A-B});$('unitSelect').innerHTML='<option value="ALL">全単語</option>'+units.map(u=>`<option value="${esc(u)}">${esc(u)}（${WORDS.filter(w=>w.unit===u).length}語）</option>`).join('');if(!['ALL',...units].includes(state.unit))state.unit='ALL';$('unitSelect').value=state.unit;$('orderSelect').value=state.order}
 function esc(s){return String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
 function audioButtons(){return `<div class="audioRow"><button data-audio="normal">🔊 発音を聞く</button><button class="slow" data-audio="slow">🐢 ゆっくり</button></div>`}
@@ -47,7 +63,28 @@ function distractors(){
 }
 function renderChoice(){// Critical: current.meaning is NOT inserted anywhere before the user answers.
 $('promptArea').innerHTML=wordHeader();const opts=shuffle([current,...distractors()]);$('interactionArea').innerHTML=`<div class="interaction"><div class="instruction">この英単語の意味を選んでください</div><div class="options" id="choiceOptions">${opts.map(o=>`<button class="option" data-id="${o.id}">${esc(o.meaning)}</button>`).join('')}</div><div class="feedback" id="choiceFeedback"></div><div id="choiceReveal"></div></div>`;document.querySelectorAll('.option').forEach(b=>b.onclick=()=>judgeChoice(b,opts));}
-function quizStat(ok){const q=state.quiz[current.id]||{correct:0,wrong:0};q[ok?'correct':'wrong']++;state.quiz[current.id]=q;let r=rating(current);if(ok)r=Math.min(3,Math.max(1,r+1));else r=1;state.ratings[current.id]=r;save();updateStats()}
+function quizStat(ok){
+  const q=state.quiz[current.id]||{correct:0,wrong:0,streak:0};
+  if(ok){
+    q.correct=(q.correct||0)+1;
+    q.streak=(q.streak||0)+1;
+  }else{
+    q.wrong=(q.wrong||0)+1;
+    q.streak=0;
+  }
+  state.quiz[current.id]=q;
+  let r=rating(current);
+  if(ok){
+    // First correct: never '苦手'. 1 correct => あやしい, 2 consecutive correct => 習得.
+    if((q.streak||0)>=2) r=3;
+    else if(r<2) r=2;
+  }else{
+    // One miss lowers confidence, but does not erase an already-mastered word all the way to weak.
+    r=(r===3)?2:1;
+  }
+  state.ratings[current.id]=r;
+  save();updateStats();
+}
 function judgeChoice(btn,opts){if(locked)return;locked=true;const ok=btn.dataset.id===current.id;quizStat(ok);document.querySelectorAll('.option').forEach(b=>{b.disabled=true;if(b.dataset.id===current.id)b.classList.add('correct')});if(!ok)btn.classList.add('wrong');$('choiceFeedback').textContent=ok?'✅ 正解！':'❌ もう一度覚えよう';$('choiceReveal').innerHTML=`<div class="answerReveal"><strong>${esc(current.word)}</strong> = ${esc(current.meaning)}<br><span class="ipa">${esc(current.ipa)}</span>　<span class="kana">${esc(current.kanaGuide)}</span></div>`;setTimeout(next,1600)}
 function renderSpell(){// The English spelling and pronunciation are deliberately hidden until judgment.
 $('promptArea').innerHTML=`<div class="prompt"><div class="spellPrompt">${esc(current.meaning)}</div><div class="pos">${esc(current.partOfSpeech)}</div></div>`;$('interactionArea').innerHTML=`<div class="interaction"><div class="instruction">日本語から英単語を入力</div><div class="spellRow"><input id="spellInput" autocomplete="off" autocapitalize="off" spellcheck="false"><button id="spellBtn">判定</button></div><div class="feedback" id="spellFeedback"></div><div id="spellReveal"></div></div>`;const inp=$('spellInput');inp.focus();$('spellBtn').onclick=judgeSpell;inp.onkeydown=e=>{if(e.key==='Enter')judgeSpell()}}
