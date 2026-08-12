@@ -28,9 +28,23 @@ function wordHeader({showWord=true,showPron=true}={}){return `<div class="prompt
 function renderCurrent(){locked=false;pronAttempts=[];$('studyView').classList.remove('hidden');$('listView').classList.add('hidden');$('counterText').textContent=`${current.unit} ・ ${current.order} / ${WORDS.filter(w=>w.unit===current.unit).length}　｜　範囲内 ${Math.min(index,queue.length)} / ${queue.length}`;const mode=state.mode;if(mode==='card'||mode==='weak')renderCard();else if(mode==='choice')renderChoice();else if(mode==='spell')renderSpell();else if(mode==='pronounce')renderPron();$('statusLine').textContent=`現在の状態：${statusLabel(rating(current))}`;bindAudio()}
 function bindAudio(){document.querySelectorAll('[data-audio]').forEach(b=>b.onclick=()=>speak(b.dataset.audio==='slow'?.58:.82))}
 function renderCard(){$('promptArea').innerHTML=wordHeader();$('interactionArea').innerHTML=`<div class="interaction"><div id="cardReveal"><div class="instruction">意味を思い出してから表示してください</div><div class="actionRow"><button class="primary" id="revealBtn">意味を見る</button></div></div><div id="cardAnswer" class="hidden"><div class="meaning">${esc(current.meaning)}</div><div class="actionRow"><button class="rateBad" data-rate="1">😣 覚えてない</button><button class="rateMid" data-rate="2">🤔 あやしい</button><button class="rateGood" data-rate="3">✅ 覚えた</button></div></div><div class="actionRow"><button id="prevBtn">← 前へ</button><button id="skipBtn">次へ →</button></div></div>`;$('revealBtn').onclick=()=>{$('cardReveal').classList.add('hidden');$('cardAnswer').classList.remove('hidden')};document.querySelectorAll('[data-rate]').forEach(b=>b.onclick=()=>{setRating(current,Number(b.dataset.rate));setTimeout(next,120)});$('prevBtn').onclick=prev;$('skipBtn').onclick=next}
-function meaningParts(m){return String(m||'').replace(/[〜～]/g,'').split(/[、，・／/;；]|\s+/).map(x=>x.trim()).filter(x=>x.length>=2)}
-function meaningConflict(a,b){if(normalize(a.meaning)===normalize(b.meaning))return true;const A=meaningParts(a.meaning),B=meaningParts(b.meaning);return A.some(x=>B.some(y=>x===y||(x.length>=3&&y.length>=3&&(x.includes(y)||y.includes(x)))))}
-function distractors(){let pool=WORDS.filter(w=>w.id!==current.id&&!meaningConflict(w,current));const samePos=shuffle(pool.filter(w=>w.partOfSpeech===current.partOfSpeech));const sameUnit=shuffle(pool.filter(w=>w.unit===current.unit&&!samePos.some(x=>x.id===w.id)));const all=shuffle(pool.filter(w=>!samePos.some(x=>x.id===w.id)&&!sameUnit.some(x=>x.id===w.id)));const out=[];for(const x of [...samePos,...sameUnit,...all]){if(!out.some(y=>normalize(y.meaning)===normalize(x.meaning)))out.push(x);if(out.length===3)break}return out}
+function normalizeMeaning(s){return String(s||'').toLowerCase().normalize('NFKC').replace(/[〜～]/g,'').replace(/[、，,。．・／/;；:：!?！？「」『』（）()\[\]【】]/g,' ').replace(/\s+/g,' ').trim()}
+function meaningParts(m){return normalizeMeaning(m).split(/\s+/).map(x=>x.trim()).filter(x=>x.length>=2)}
+function meaningConflict(a,b){const am=normalizeMeaning(a.meaning),bm=normalizeMeaning(b.meaning);if(!am||!bm)return false;if(am===bm)return true;const A=meaningParts(a.meaning),B=meaningParts(b.meaning);return A.some(x=>B.some(y=>x===y&&(x.length>=2)))}
+function distractors(){
+  const out=[];
+  const usedMeaning=new Set([normalizeMeaning(current.meaning)]);
+  const addPool=pool=>{for(const x of shuffle(pool)){const m=normalizeMeaning(x.meaning);if(!m||usedMeaning.has(m)||out.some(y=>y.id===x.id))continue;out.push(x);usedMeaning.add(m);if(out.length===3)break}};
+  const eligible=WORDS.filter(w=>w.id!==current.id);
+  // まず「同じ品詞かつ意味の衝突がない」候補を優先。
+  addPool(eligible.filter(w=>w.partOfSpeech===current.partOfSpeech&&!meaningConflict(w,current)));
+  // 次に同じDAY、最後に全体から補充。
+  if(out.length<3)addPool(eligible.filter(w=>w.unit===current.unit&&!meaningConflict(w,current)));
+  if(out.length<3)addPool(eligible.filter(w=>!meaningConflict(w,current)));
+  // 安全弁：意味の完全一致だけを除外し、必ず3個まで補充する。
+  if(out.length<3)addPool(eligible.filter(w=>normalizeMeaning(w.meaning)!==normalizeMeaning(current.meaning)));
+  return out.slice(0,3)
+}
 function renderChoice(){// Critical: current.meaning is NOT inserted anywhere before the user answers.
 $('promptArea').innerHTML=wordHeader();const opts=shuffle([current,...distractors()]);$('interactionArea').innerHTML=`<div class="interaction"><div class="instruction">この英単語の意味を選んでください</div><div class="options" id="choiceOptions">${opts.map(o=>`<button class="option" data-id="${o.id}">${esc(o.meaning)}</button>`).join('')}</div><div class="feedback" id="choiceFeedback"></div><div id="choiceReveal"></div></div>`;document.querySelectorAll('.option').forEach(b=>b.onclick=()=>judgeChoice(b,opts));}
 function quizStat(ok){const q=state.quiz[current.id]||{correct:0,wrong:0};q[ok?'correct':'wrong']++;state.quiz[current.id]=q;let r=rating(current);if(ok)r=Math.min(3,Math.max(1,r+1));else r=1;state.ratings[current.id]=r;save();updateStats()}
@@ -41,8 +55,30 @@ function judgeSpell(){if(locked)return;const inp=$('spellInput');const a=normali
 const SpeechRecognition=window.SpeechRecognition||window.webkitSpeechRecognition||null;
 function editDistance(a,b){const d=Array.from({length:a.length+1},()=>Array(b.length+1).fill(0));for(let i=0;i<=a.length;i++)d[i][0]=i;for(let j=0;j<=b.length;j++)d[0][j]=j;for(let i=1;i<=a.length;i++)for(let j=1;j<=b.length;j++)d[i][j]=Math.min(d[i-1][j]+1,d[i][j-1]+1,d[i-1][j-1]+(a[i-1]===b[j-1]?0:1));return d[a.length][b.length]}
 function speechGrade(text){const got=normalize(text).split(' ')[0]||'';const ans=normalize(current.word);if(got===ans)return {grade:'ok',label:'🟢 OK',got};const ratio=editDistance(got,ans)/Math.max(ans.length,1);if(got&&ratio<=.28)return {grade:'close',label:'🟡 惜しい',got};return {grade:'bad',label:'🔴 要練習',got:got||'認識なし'}}
-function renderPron(){$('promptArea').innerHTML=wordHeader();$('interactionArea').innerHTML=`<div class="interaction pronBox"><div class="instruction">お手本を聞いてから1語だけ発音。最大3回で総合判定します。</div><div class="attempts" id="attempts"><div class="attempt">まだ発音していません</div></div><button class="micBtn" id="micBtn">🎤 発音してみる</button><div class="feedback" id="pronFeedback"></div><div class="note">これは「ネイティブ度」の採点ではなく、ブラウザ音声認識に英単語として通じるかの目安です。</div></div>`;const b=$('micBtn');if(!SpeechRecognition){b.disabled=true;b.textContent='このブラウザでは音声認識非対応';return}b.onclick=startRecognition}
-function startRecognition(){if(pronAttempts.length>=3){pronAttempts=[];renderAttempts()}const b=$('micBtn');b.classList.add('listening');b.textContent='● 聞き取り中…';const r=new SpeechRecognition();r.lang='en-US';r.interimResults=false;r.maxAlternatives=5;let finished=false;r.onresult=e=>{finished=true;const alts=[];for(let i=0;i<e.results[0].length;i++)alts.push(e.results[0][i].transcript);let best=null;for(const t of alts){const g=speechGrade(t);if(!best||({ok:3,close:2,bad:1}[g.grade]>{ok:3,close:2,bad:1}[best.grade]))best=g}pronAttempts.push(best||speechGrade(''));renderAttempts();savePron(best);resetMic()};r.onerror=e=>{if(!finished){pronAttempts.push({grade:'bad',label:'🔴 要練習',got:`認識エラー: ${e.error}`});renderAttempts()}resetMic()};r.onend=resetMic;try{r.start()}catch{resetMic()};function resetMic(){b.classList.remove('listening');b.textContent=pronAttempts.length>=3?'🎤 3回やり直す':'🎤 発音してみる'}}
+function renderPron(){$('promptArea').innerHTML=wordHeader();$('interactionArea').innerHTML=`<div class="interaction pronBox"><div class="instruction">お手本を聞いてから、🎤を押します。「今、発音してください」と出てから1語だけ発音してください。最大3回で総合判定します。</div><div class="pronStatus" id="pronStatus">待機中</div><div class="attempts" id="attempts"><div class="attempt">まだ発音していません</div></div><button class="micBtn" id="micBtn">🎤 発音してみる</button><div class="feedback" id="pronFeedback"></div><div class="actionRow navRow"><button id="pronPrevBtn">← 前へ</button><button class="primary" id="pronNextBtn">次へ →</button></div><div class="note">音声を拾えなかった場合やブラウザ側の認識エラーは、発音の失敗回数には数えません。これは「ネイティブ度」の採点ではなく、英単語として通じるかの目安です。</div></div>`;const b=$('micBtn');$('pronPrevBtn').onclick=()=>{stopActiveRecognition();prev()};$('pronNextBtn').onclick=()=>{stopActiveRecognition();next()};if(!SpeechRecognition){b.disabled=true;b.textContent='このブラウザでは音声認識非対応';$('pronStatus').textContent='このブラウザでは発音チェックを利用できません';return}b.onclick=startRecognition}
+let activeRecognition=null;
+function stopActiveRecognition(){if(activeRecognition){try{activeRecognition.abort()}catch{}activeRecognition=null}}
+async function primeMicrophone(){if(!navigator.mediaDevices||!navigator.mediaDevices.getUserMedia)return;const stream=await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:true,noiseSuppression:true,autoGainControl:true}});stream.getTracks().forEach(t=>t.stop())}
+function pickBestSpeech(candidates){let best=null;for(const t of candidates){const g=speechGrade(t);if(!best||({ok:3,close:2,bad:1}[g.grade]>{ok:3,close:2,bad:1}[best.grade]))best=g}return best}
+async function startRecognition(){
+  if(activeRecognition)return;
+  if(pronAttempts.length>=3){pronAttempts=[];renderAttempts();$('pronFeedback').textContent=''}
+  const b=$('micBtn'),st=$('pronStatus');
+  b.disabled=true;b.classList.add('listening');b.textContent='🎤 マイク準備中…';st.textContent='マイクを準備しています…';
+  try{await primeMicrophone()}catch(e){b.disabled=false;b.classList.remove('listening');b.textContent='🎤 発音してみる';st.textContent='⚠️ マイクを使用できません。ブラウザのマイク許可を確認してください。';return}
+  const r=new SpeechRecognition();activeRecognition=r;r.lang='en-US';r.interimResults=true;r.continuous=false;r.maxAlternatives=10;
+  const GrammarList=window.SpeechGrammarList||window.webkitSpeechGrammarList;
+  if(GrammarList){try{const gl=new GrammarList();gl.addFromString(`#JSGF V1.0; grammar target; public <target> = ${current.word};`,1);r.grammars=gl}catch{}}
+  let candidates=[],finalized=false,hadResult=false,technicalError='';
+  const finishAttempt=()=>{if(finalized)return;finalized=true;const best=pickBestSpeech(candidates);if(best){pronAttempts.push(best);renderAttempts();savePron(best);st.textContent=`認識結果：「${best.got}」`;}else if(technicalError==='no-speech'){st.textContent='⚠️ 音声を拾えませんでした。回数には数えていません。もう一度試してください。';}else if(technicalError){st.textContent=`⚠️ 音声認識エラー：${technicalError}（回数には数えていません）`;}else{st.textContent='⚠️ 認識結果が返りませんでした。回数には数えていません。もう一度試してください。';}};
+  const resetMic=()=>{activeRecognition=null;b.disabled=false;b.classList.remove('listening');b.textContent=pronAttempts.length>=3?'🎤 3回やり直す':'🎤 発音してみる'};
+  r.onaudiostart=()=>{st.textContent='✅ マイク準備OK。今、発音してください';b.textContent='👂 聞き取り中…'};
+  r.onspeechstart=()=>{st.textContent='👂 声を検出しました。認識中…'};
+  r.onresult=e=>{hadResult=true;for(let ri=e.resultIndex;ri<e.results.length;ri++){for(let ai=0;ai<e.results[ri].length;ai++){const t=e.results[ri][ai].transcript;if(t)candidates.push(t)}if(e.results[ri].isFinal){finishAttempt();try{r.stop()}catch{}break}}};
+  r.onerror=e=>{technicalError=e.error||'unknown';if(technicalError!=='aborted')finishAttempt()};
+  r.onend=()=>{if(!finalized){if(hadResult&&candidates.length)finishAttempt();else finishAttempt()}resetMic()};
+  try{r.start()}catch(e){technicalError='start-failed';finishAttempt();resetMic()}
+}
 function renderAttempts(){const box=$('attempts');if(!box)return;box.innerHTML=pronAttempts.length?pronAttempts.map((a,i)=>`<div class="attempt ${a.grade}">${i+1}回目：${a.label}　認識「${esc(a.got)}」</div>`).join(''):'<div class="attempt">まだ発音していません</div>';if(pronAttempts.length>=3){const ok=pronAttempts.filter(a=>a.grade==='ok').length,close=pronAttempts.filter(a=>a.grade!=='bad').length;const result=ok>=2?'✅ 総合：発音OK':close>=2?'△ 総合：かなり近い':'🔁 総合：もう少し練習';$('pronFeedback').textContent=result}}
 function savePron(g){if(!g)return;const p=state.pron[current.id]||{ok:0,close:0,bad:0};p[g.grade]=(p[g.grade]||0)+1;state.pron[current.id]=p;save()}
 function renderEmpty(){$('promptArea').innerHTML='<div class="meaning">対象の単語がありません</div>';$('interactionArea').innerHTML='<div class="instruction">学習範囲またはモードを変更してください。</div>';$('counterText').textContent='';$('statusLine').textContent=''}
